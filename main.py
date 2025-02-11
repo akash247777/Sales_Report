@@ -18,8 +18,8 @@ def format_currency(value):
 def format_report(result, site_id, site_name, from_date, to_date):
     """
     Process the query result (a list of tuples) and produce a text report
-    in which every line is a fixed width (180 characters by default). This
-    ensures that the output file has constant dimensions.
+    in which every line is fixed to 180 characters. This ensures that the
+    output file has constant dimensions.
     """
     PAGE_WIDTH = 180
 
@@ -175,7 +175,6 @@ def format_report(result, site_id, site_name, from_date, to_date):
     lines.append("-" * PAGE_WIDTH)
 
     # Sales summary and collections.
-    # (This block is kept exactly the same as your original snippet.)
     lines.extend([
         "\nSALES :-",
         f"\n       Net Cash Sales        : {format_currency(net_cash_sales)}",
@@ -391,8 +390,16 @@ def get_report_data(site_id, from_date, to_date, username, password, database, i
 # =============================================================================
 
 def main():
-    st.title("Sales Summary Report Generator")
+    st.title("SALES SUMMARY REPORT")
     st.write("Upload an Excel (.xlsx) or text/CSV file containing one 5-digit Site ID.")
+    
+    # Use session state to hold the generated ZIP file and error messages.
+    if "zip_buffer" not in st.session_state:
+        st.session_state.zip_buffer = None
+    if "last_uploaded_file" not in st.session_state:
+        st.session_state.last_uploaded_file = None
+    if "disconnected_sites" not in st.session_state:
+        st.session_state.disconnected_sites = {}
     
     # ------------------ Sidebar ------------------
     st.sidebar.header("Database Credentials")
@@ -407,10 +414,41 @@ def main():
     from_date_input = st.sidebar.date_input("From Date", value=datetime.today(), key="from_date")
     to_date_input = st.sidebar.date_input("To Date", value=datetime.today(), key="to_date")
     
+    # Inject custom CSS so that the download button and error info remain fixed.
+    st.markdown(
+        """
+        <style>
+        .fixed-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #f8f9fa;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            z-index: 1000;
+            max-width: 300px;
+        }
+        .fixed-container p {
+            margin: 0;
+            padding: 2px 0;
+            font-size: 0.9em;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    
     # ------------------ Main Content ------------------
     uploaded_file = st.file_uploader("Upload Site IDs file", type=["xlsx", "txt", "csv"])
     
     if uploaded_file is not None:
+        # If a new file is uploaded, clear previous report in session state.
+        if st.session_state.last_uploaded_file != uploaded_file:
+            st.session_state.zip_buffer = None
+            st.session_state.disconnected_sites = {}
+            st.session_state.last_uploaded_file = uploaded_file
+
         # Read file based on its extension.
         if uploaded_file.name.endswith('.xlsx'):
             try:
@@ -477,9 +515,8 @@ def main():
             
             progress_placeholder.text("All sites processed.")
             
-            if disconnected_sites:
-                for sid, error_msg in disconnected_sites.items():
-                    st.write(f"**Site {sid}:** {error_msg}")
+            # Save disconnected sites (if any) to session state.
+            st.session_state.disconnected_sites = disconnected_sites
             
             if successful_reports:
                 zip_buffer = io.BytesIO()
@@ -487,9 +524,21 @@ def main():
                     for sid, report in successful_reports.items():
                         zip_file.writestr(f"{sid}.txt", report)
                 zip_buffer.seek(0)
-                st.download_button("Download Connected Site Reports (ZIP)", zip_buffer, file_name="SiteReports.zip")
+                st.session_state.zip_buffer = zip_buffer  # Save the ZIP file in session state.
             else:
                 st.error("No successful reports to save.")
+
+    # Fixed container for the download button and error messages.
+    if st.session_state.zip_buffer is not None or st.session_state.disconnected_sites:
+        with st.container():
+            st.markdown('<div class="fixed-container">', unsafe_allow_html=True)
+            if st.session_state.zip_buffer is not None:
+                st.download_button("Download Connected Site Reports (ZIP)", st.session_state.zip_buffer, file_name="SiteReports.zip", key="download_zip")
+            if st.session_state.disconnected_sites:
+                st.markdown("<p><strong>Disconnected Sites:</strong></p>", unsafe_allow_html=True)
+                for sid, err in st.session_state.disconnected_sites.items():
+                    st.markdown(f"<p>{sid}: {err}</p>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
