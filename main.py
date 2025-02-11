@@ -397,10 +397,10 @@ def main():
     
     # ------------------ Sidebar ------------------
     st.sidebar.header("Database Credentials")
-    # Try to load credentials from environment variables; if not found, allow user input.
-    username = os.environ.get("DB_USER") or st.sidebar.text_input("Username", key="username")
-    password = os.environ.get("DB_PASSWORD") or st.sidebar.text_input("Password", type="password", key="password")
-    database = os.environ.get("DB_NAME") or st.sidebar.text_input("Database Name", key="database")
+    # Try to load credentials from Streamlit Secrets first, then environment variables, then allow manual input.
+    username = st.secrets.get("DB_USER") or os.environ.get("DB_USER") or st.sidebar.text_input("Username", key="username")
+    password = st.secrets.get("DB_PASSWORD") or os.environ.get("DB_PASSWORD") or st.sidebar.text_input("Password", type="password", key="password")
+    database = st.secrets.get("DB_NAME") or os.environ.get("DB_NAME") or st.sidebar.text_input("Database Name", key="database")
     
     st.sidebar.header("Server Settings")
     ip_series_choice = st.sidebar.radio("Select Server Series", ("16", "28"), key="ip_series")
