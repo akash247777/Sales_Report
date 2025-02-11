@@ -23,7 +23,6 @@ def format_report(result, site_id, site_name, from_date, to_date):
     """
     PAGE_WIDTH = 180
 
-    # Helper function: pad or truncate a line to exactly PAGE_WIDTH characters.
     def fix_line(line, width=PAGE_WIDTH):
         clean = line.rstrip("\n")
         if len(clean) < width:
@@ -31,25 +30,21 @@ def format_report(result, site_id, site_name, from_date, to_date):
         else:
             return clean[:width]
 
-    # Get current date and time.
     now = datetime.now()
     header_date = now.strftime("%d/%m/%Y")
     header_time = now.strftime("%I:%M %p")
 
     lines = []
-
-    # Header Section.
     lines.append(f"DATE: {header_date}".rjust(PAGE_WIDTH))
     lines.append(f"TIME: {header_time}".rjust(PAGE_WIDTH))
-    lines.append("")  # Blank line.
+    lines.append("")
     lines.append("APOLLO PHARMACIES LIMITED".center(PAGE_WIDTH))
     lines.append(f"{site_id} - {site_name}".center(PAGE_WIDTH))
-    lines.append("")  # Blank line.
+    lines.append("")
     lines.append("Sales Transaction Summary Report".center(PAGE_WIDTH))
     lines.append(f"From Date : {from_date}    To Date : {to_date}".center(PAGE_WIDTH))
     lines.append("-" * PAGE_WIDTH)
 
-    # Header for the three groups (Sales | Returns | Net)
     header_groups = (
         "|" +
         " SALES ".center(55) +
@@ -62,7 +57,6 @@ def format_report(result, site_id, site_name, from_date, to_date):
     lines.append(header_groups)
     lines.append("-" * PAGE_WIDTH)
 
-    # Define the table header row.
     header_cols = (
         f"{'BILLTYPE':<17} |"
         f"{'NO':>8} |"
@@ -81,9 +75,8 @@ def format_report(result, site_id, site_name, from_date, to_date):
     lines.append(header_cols)
     lines.append("-" * PAGE_WIDTH)
 
-    # Process data rows from the query.
-    sales_data = []    # For sales rows.
-    partner_data = []  # For partner rows.
+    sales_data = []
+    partner_data = []
 
     for row in result:
         isheader = row[0]
@@ -132,7 +125,6 @@ def format_report(result, site_id, site_name, from_date, to_date):
     tot_overall_disc  = tot_sale_disc + tot_ret_disc
     tot_overall_net   = tot_sale_net + tot_ret_net
 
-    # Build report rows for each sales entry.
     for s in sales_data:
         overall_count = s["SALECOUNT"] + s["RETCOUNT"]
         overall_amt   = s["SALE_AMT"] + s["RET_AMT"]
@@ -174,7 +166,6 @@ def format_report(result, site_id, site_name, from_date, to_date):
     lines.append(totals_line)
     lines.append("-" * PAGE_WIDTH)
 
-    # Sales summary and collections.
     lines.extend([
         "\nSALES :-",
         f"\n       Net Cash Sales        : {format_currency(net_cash_sales)}",
@@ -195,7 +186,6 @@ def format_report(result, site_id, site_name, from_date, to_date):
         "\n" + "-" * 180 + "\n"
     ])
 
-    # Partner Program Summary.
     lines.append("\nPartner Program Summary  :\n")
     partner_header = " slno| Name                                     |     NoInv        |    Amount    |"
     lines.append(partner_header)
@@ -216,12 +206,10 @@ def format_report(result, site_id, site_name, from_date, to_date):
     lines.append(partner_totals_line)
     lines.append("-" * (PAGE_WIDTH - 50))
     
-    # Ensure every line is exactly PAGE_WIDTH characters.
     fixed_lines = [fix_line(line) for line in lines]
     return "\n".join(fixed_lines)
 
 def try_connection(series, formatted_site_id, username, password, database):
-    """Attempt to connect using the given IP series."""
     host = f"{series}{formatted_site_id}"
     try:
         connection = pyodbc.connect(
@@ -236,10 +224,6 @@ def try_connection(series, formatted_site_id, username, password, database):
         return None
 
 def connect_to_database(site_id, username, password, database, ip_series_choice):
-    """
-    Attempt to connect using the specified IP series ("16" or "28").
-    Returns the first successful connection or None.
-    """
     formatted_site_id = f"{site_id[:3]}.{int(site_id[3:])}"
     if ip_series_choice == "16":
         ip_series = ["10.16."]
@@ -258,9 +242,6 @@ def connect_to_database(site_id, username, password, database, ip_series_choice)
 
 @st.cache_data(show_spinner=False)
 def get_report_data(site_id, from_date, to_date, username, password, database, ip_series_choice):
-    """
-    Connect to the database, run the query, and return (result, site_name).
-    """
     connection = connect_to_database(site_id, username, password, database, ip_series_choice)
     if not connection:
         raise ConnectionError(f"Could not connect to any IP series for site {site_id}.")
@@ -392,30 +373,28 @@ def get_report_data(site_id, from_date, to_date, username, password, database, i
 def main():
     st.title("SALES SUMMARY REPORT")
     st.write("Upload an Excel (.xlsx) or text/CSV file containing one 5-digit Site ID.")
-    
-    # Use session state to hold the generated ZIP file and error messages.
+
     if "zip_buffer" not in st.session_state:
         st.session_state.zip_buffer = None
     if "last_uploaded_file" not in st.session_state:
         st.session_state.last_uploaded_file = None
     if "disconnected_sites" not in st.session_state:
         st.session_state.disconnected_sites = {}
-    
+
     # ------------------ Sidebar ------------------
     st.sidebar.header("Database Credentials")
-    # Use Streamlit Secrets first. If they aren't set, fallback to manual entry.
-    username = st.secrets.get("DB_USER") or st.sidebar.text_input("Username", key="username")
-    password = st.secrets.get("DB_PASSWORD") or st.sidebar.text_input("Password", type="password", key="password")
-    database = st.secrets.get("DB_NAME") or st.sidebar.text_input("Database Name", key="database")
-    
+    # Credentials are now loaded from .streamlit/secrets.toml
+    username = st.secrets["USERNAME"]
+    password = st.secrets["PASSWORD"]
+    database = st.secrets["DATABASE"]
+
     st.sidebar.header("Server Settings")
     ip_series_choice = st.sidebar.radio("Select Server Series", ("16", "28"), key="ip_series")
-    
+
     st.sidebar.header("Date Range")
     from_date_input = st.sidebar.date_input("From Date", value=datetime.today(), key="from_date")
     to_date_input = st.sidebar.date_input("To Date", value=datetime.today(), key="to_date")
     
-    # Inject custom CSS so that the download button and error info remain fixed.
     st.markdown(
         """
         <style>
@@ -444,13 +423,11 @@ def main():
     uploaded_file = st.file_uploader("Upload Site IDs file", type=["xlsx", "txt", "csv"])
     
     if uploaded_file is not None:
-        # If a new file is uploaded, clear previous report in session state.
         if st.session_state.last_uploaded_file != uploaded_file:
             st.session_state.zip_buffer = None
             st.session_state.disconnected_sites = {}
             st.session_state.last_uploaded_file = uploaded_file
 
-        # Read file based on its extension.
         if uploaded_file.name.endswith('.xlsx'):
             try:
                 df = pd.read_excel(uploaded_file)
@@ -479,11 +456,6 @@ def main():
         st.write(f"Found {len(valid_site_ids)} valid site IDs.")
         
         if st.button("Generate Reports"):
-            if not (username and password and database):
-                st.error("Please enter your Username, Password, and Database Name before generating reports.")
-                st.stop()
-            
-            # Validate credentials using the first valid Site ID.
             if valid_site_ids:
                 st.info("Validating credentials with test connection...")
                 try:
@@ -515,8 +487,6 @@ def main():
                     disconnected_sites[sid] = f"Error occurred: {e}"
             
             progress_placeholder.text("All sites processed.")
-            
-            # Save disconnected sites (if any) to session state.
             st.session_state.disconnected_sites = disconnected_sites
             
             if successful_reports:
@@ -525,11 +495,10 @@ def main():
                     for sid, report in successful_reports.items():
                         zip_file.writestr(f"{sid}.txt", report)
                 zip_buffer.seek(0)
-                st.session_state.zip_buffer = zip_buffer  # Save the ZIP file in session state.
+                st.session_state.zip_buffer = zip_buffer
             else:
                 st.error("No successful reports to save.")
 
-    # Fixed container for the download button and error messages.
     if st.session_state.zip_buffer is not None or st.session_state.disconnected_sites:
         with st.container():
             st.markdown('<div class="fixed-container">', unsafe_allow_html=True)
