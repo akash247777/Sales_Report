@@ -226,7 +226,7 @@ def try_connection(series, formatted_site_id, username, password, database):
     try:
         connection = pyodbc.connect(
             f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-            f"SERVER={host};"
+            f"SERVER={host},1433;"
             f"UID={username};"
             f"PWD={password};"
             f"DATABASE={database};"
