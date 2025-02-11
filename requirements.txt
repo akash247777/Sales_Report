@@ -1,4 +1,3 @@
-streamlit
 pyodbc
 openpyxl
-python-dotenv
+
