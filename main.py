@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pyodbc
 from datetime import datetime
@@ -6,17 +7,15 @@ import io
 import zipfile
 import pandas as pd
 import concurrent.futures
+from dotenv import load_dotenv
 
-# ---------------------------------------------------------------------------
-# Hardcoded Database Credentials
-# ---------------------------------------------------------------------------
-USERNAME = "apposcr"
-PASSWORD = "2#06A9a"
-DATABASE = "POSDBIR"
+# Optionally load a .env file for local testing.
+load_dotenv()
 
 # =============================================================================
 # Utility Functions
 # =============================================================================
+
 def format_currency(value):
     """Format a numeric value as a currency string with 2 decimals."""
     return f"{value:,.2f}"
@@ -28,7 +27,6 @@ def format_report(result, site_id, site_name, from_date, to_date):
     """
     PAGE_WIDTH = 180
 
-    # Helper function: pad or truncate a line to exactly PAGE_WIDTH characters.
     def fix_line(line, width=PAGE_WIDTH):
         clean = line.rstrip("\n")
         if len(clean) < width:
@@ -41,6 +39,7 @@ def format_report(result, site_id, site_name, from_date, to_date):
     header_time = now.strftime("%I:%M %p")
 
     lines = []
+    # Header Section.
     lines.append(f"DATE: {header_date}".rjust(PAGE_WIDTH))
     lines.append(f"TIME: {header_time}".rjust(PAGE_WIDTH))
     lines.append("")
@@ -366,13 +365,13 @@ def get_report_data(site_id, from_date, to_date, username, password, database, i
         group by tendertype
         """
         params = (
-            from_date, to_date,
-            from_date, to_date,
-            from_date, to_date,
-            from_date, to_date,
-            from_date, to_date,
-            from_date, to_date,
-            from_date, to_date
+            from_date, to_date,   # For the first BETWEEN clause.
+            from_date, to_date,   # For the subquery in the NOT IN clause.
+            from_date, to_date,   # For the second block.
+            from_date, to_date,   # For the corporate summary.
+            from_date, to_date,   # For the HEALING_CARD_TRANSACTION date range.
+            from_date, to_date,   # For the ACXSETTLEMENTDETAILS date range.
+            from_date, to_date    # For the final BETWEEN clause.
         )
         cursor.execute(query, params)
         result = cursor.fetchall()
@@ -397,6 +396,12 @@ def main():
         st.session_state.disconnected_sites = {}
     
     # ------------------ Sidebar ------------------
+    st.sidebar.header("Database Credentials")
+    # Try to load credentials from environment variables; if not found, allow user input.
+    username = os.environ.get("DB_USER") or st.sidebar.text_input("Username", key="username")
+    password = os.environ.get("DB_PASSWORD") or st.sidebar.text_input("Password", type="password", key="password")
+    database = os.environ.get("DB_NAME") or st.sidebar.text_input("Database Name", key="database")
+    
     st.sidebar.header("Server Settings")
     ip_series_choice = st.sidebar.radio("Select Server Series", ("16", "28"), key="ip_series")
     
@@ -404,7 +409,6 @@ def main():
     from_date_input = st.sidebar.date_input("From Date", value=datetime.today(), key="from_date")
     to_date_input = st.sidebar.date_input("To Date", value=datetime.today(), key="to_date")
     
-    # Inject custom CSS so that the download button and error info remain fixed.
     st.markdown(
         """
         <style>
@@ -433,13 +437,11 @@ def main():
     uploaded_file = st.file_uploader("Upload Site IDs file", type=["xlsx", "txt", "csv"])
     
     if uploaded_file is not None:
-        # Clear previous report if a new file is uploaded.
         if st.session_state.last_uploaded_file != uploaded_file:
             st.session_state.zip_buffer = None
             st.session_state.disconnected_sites = {}
             st.session_state.last_uploaded_file = uploaded_file
 
-        # Read file based on its extension.
         if uploaded_file.name.endswith('.xlsx'):
             try:
                 df = pd.read_excel(uploaded_file)
@@ -468,11 +470,15 @@ def main():
         st.write(f"Found {len(valid_site_ids)} valid site IDs.")
         
         if st.button("Generate Reports"):
+            if not (username and password and database):
+                st.error("Please enter your Username, Password, and Database Name before generating reports.")
+                st.stop()
+            
             # Validate credentials using the first valid Site ID.
             if valid_site_ids:
                 st.info("Validating credentials with test connection...")
                 try:
-                    test_conn = connect_to_database(valid_site_ids[0], USERNAME, PASSWORD, DATABASE, ip_series_choice)
+                    test_conn = connect_to_database(valid_site_ids[0], username, password, database, ip_series_choice)
                     if not test_conn:
                         raise Exception("Test connection failed.")
                     test_conn.close()
@@ -490,7 +496,7 @@ def main():
                 try:
                     from_date_str = from_date_input.strftime("%Y-%m-%d")
                     to_date_str = to_date_input.strftime("%Y-%m-%d")
-                    result, site_name = get_report_data(sid, from_date_str, to_date_str, USERNAME, PASSWORD, DATABASE, ip_series_choice)
+                    result, site_name = get_report_data(sid, from_date_str, to_date_str, username, password, database, ip_series_choice)
                     if result:
                         report_text = format_report(result, sid, site_name, from_date_str, to_date_str)
                         successful_reports[sid] = report_text
@@ -500,7 +506,6 @@ def main():
                     disconnected_sites[sid] = f"Error occurred: {e}"
             
             progress_placeholder.text("All sites processed.")
-            
             st.session_state.disconnected_sites = disconnected_sites
             
             if successful_reports:
@@ -513,7 +518,6 @@ def main():
             else:
                 st.error("No successful reports to save.")
 
-    # Fixed container for the download button and error messages.
     if st.session_state.zip_buffer is not None or st.session_state.disconnected_sites:
         with st.container():
             st.markdown('<div class="fixed-container">', unsafe_allow_html=True)
