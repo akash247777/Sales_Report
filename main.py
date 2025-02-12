@@ -1,4 +1,7 @@
-import streamlit as st
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+from tkinter.scrolledtext import ScrolledText
+from tkcalendar import DateEntry  # pip install tkcalendar
 import pyodbc
 from datetime import datetime
 from decimal import Decimal
@@ -6,9 +9,10 @@ import io
 import zipfile
 import pandas as pd
 import concurrent.futures
+import os
 
 # =============================================================================
-# Utility Functions
+# Utility Functions (unchanged)
 # =============================================================================
 
 def format_currency(value):
@@ -18,8 +22,7 @@ def format_currency(value):
 def format_report(result, site_id, site_name, from_date, to_date):
     """
     Process the query result (a list of tuples) and produce a text report
-    in which every line is fixed to 180 characters. This ensures that the
-    output file has constant dimensions.
+    in which every line is fixed to 180 characters.
     """
     PAGE_WIDTH = 180
 
@@ -35,6 +38,7 @@ def format_report(result, site_id, site_name, from_date, to_date):
     header_time = now.strftime("%I:%M %p")
 
     lines = []
+    # Header Section.
     lines.append(f"DATE: {header_date}".rjust(PAGE_WIDTH))
     lines.append(f"TIME: {header_time}".rjust(PAGE_WIDTH))
     lines.append("")
@@ -75,6 +79,7 @@ def format_report(result, site_id, site_name, from_date, to_date):
     lines.append(header_cols)
     lines.append("-" * PAGE_WIDTH)
 
+    # Process data rows.
     sales_data = []
     partner_data = []
 
@@ -210,6 +215,7 @@ def format_report(result, site_id, site_name, from_date, to_date):
     return "\n".join(fixed_lines)
 
 def try_connection(series, formatted_site_id, username, password, database):
+    """Attempt to connect using the given IP series."""
     host = f"{series}{formatted_site_id}"
     try:
         connection = pyodbc.connect(
@@ -224,6 +230,10 @@ def try_connection(series, formatted_site_id, username, password, database):
         return None
 
 def connect_to_database(site_id, username, password, database, ip_series_choice):
+    """
+    Attempt to connect using the specified IP series ("16" or "28").
+    Returns the first successful connection or None.
+    """
     formatted_site_id = f"{site_id[:3]}.{int(site_id[3:])}"
     if ip_series_choice == "16":
         ip_series = ["10.16."]
@@ -233,15 +243,18 @@ def connect_to_database(site_id, username, password, database, ip_series_choice)
         ip_series = []
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(ip_series)) as executor:
-        futures = {executor.submit(try_connection, series, formatted_site_id, username, password, database): series for series in ip_series}
+        futures = {executor.submit(try_connection, series, formatted_site_id, username, password, database): series 
+                   for series in ip_series}
         for future in concurrent.futures.as_completed(futures):
             connection = future.result()
             if connection:
                 return connection
     return None
 
-@st.cache_data(show_spinner=False)
 def get_report_data(site_id, from_date, to_date, username, password, database, ip_series_choice):
+    """
+    Connect to the database, run the query, and return (result, site_name).
+    """
     connection = connect_to_database(site_id, username, password, database, ip_series_choice)
     if not connection:
         raise ConnectionError(f"Could not connect to any IP series for site {site_id}.")
@@ -352,13 +365,13 @@ def get_report_data(site_id, from_date, to_date, username, password, database, i
         group by tendertype
         """
         params = (
-            from_date, to_date,   # For the first BETWEEN clause.
-            from_date, to_date,   # For the subquery in the NOT IN clause.
-            from_date, to_date,   # For the second block.
-            from_date, to_date,   # For the corporate summary.
-            from_date, to_date,   # For the HEALING_CARD_TRANSACTION date range.
-            from_date, to_date,   # For the ACXSETTLEMENTDETAILS date range.
-            from_date, to_date    # For the final BETWEEN clause.
+            from_date, to_date,
+            from_date, to_date,
+            from_date, to_date,
+            from_date, to_date,
+            from_date, to_date,
+            from_date, to_date,
+            from_date, to_date
         )
         cursor.execute(query, params)
         result = cursor.fetchall()
@@ -367,148 +380,254 @@ def get_report_data(site_id, from_date, to_date, username, password, database, i
         connection.close()
 
 # =============================================================================
-# Main Streamlit Application
+# Tkinter Application with Controls on Top and Log Output at the Bottom,
+# Using Times New Roman with Reduced Font Size (12) and an Extended, Freely Arranged Layout
 # =============================================================================
 
-def main():
-    st.title("SALES SUMMARY REPORT")
-    st.write("Upload an Excel (.xlsx) or text/CSV file containing one 5-digit Site ID.")
+class SalesSummaryReportApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Sales Summary Report")
+        # Set an extended initial geometry.
+        self.geometry("1200x800")
+        self.configure(bg="#FFFFFF")  # White background
 
-    if "zip_buffer" not in st.session_state:
-        st.session_state.zip_buffer = None
-    if "last_uploaded_file" not in st.session_state:
-        st.session_state.last_uploaded_file = None
-    if "disconnected_sites" not in st.session_state:
-        st.session_state.disconnected_sites = {}
+        # Variables to store ZIP data and file path.
+        self.zip_buffer = None
+        self.file_path = None  # For file upload mode
 
-    # ------------------ Sidebar ------------------
-    st.sidebar.header("Database Credentials")
-    # Credentials are now loaded from .streamlit/secrets.toml
-    username = st.secrets["USERNAME"]
-    password = st.secrets["PASSWORD"]
-    database = st.secrets["DATABASE"]
+        # Set up ttk style with Times New Roman fonts (font size reduced from 14 to 12).
+        self.style = ttk.Style(self)
+        self.style.theme_use("clam")
+        self.style.configure("TFrame", background="#FFFFFF")
+        self.style.configure("TLabel", background="#FFFFFF", foreground="#333333", font=("Times New Roman", 12, "bold"))
+        self.style.configure("TButton", background="#CCCCCC", foreground="#333333", font=("Times New Roman", 12, "bold"))
+        self.style.map("TButton", background=[('active', '#AAAAAA')], foreground=[('active', '#000000')])
+        self.style.configure("Input.TLabelframe", background="#F0F0F0", foreground="#333333",
+                             font=("Times New Roman", 12, "bold"), borderwidth=2)
+        self.style.configure("Input.TLabelframe.Label", background="#F0F0F0", foreground="#333333")
+        self.style.configure("TRadiobutton", font=("Times New Roman", 12, "bold"), background="#F0F0F0", foreground="#333333")
 
-    st.sidebar.header("Server Settings")
-    ip_series_choice = st.sidebar.radio("Select Server Series", ("16", "28"), key="ip_series")
+        self.create_widgets()
 
-    st.sidebar.header("Date Range")
-    from_date_input = st.sidebar.date_input("From Date", value=datetime.today(), key="from_date")
-    to_date_input = st.sidebar.date_input("To Date", value=datetime.today(), key="to_date")
-    
-    st.markdown(
-        """
-        <style>
-        .fixed-container {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background: #f8f9fa;
-            padding: 15px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            z-index: 1000;
-            max-width: 300px;
-        }
-        .fixed-container p {
-            margin: 0;
-            padding: 2px 0;
-            font-size: 0.9em;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    
-    # ------------------ Main Content ------------------
-    uploaded_file = st.file_uploader("Upload Site IDs file", type=["xlsx", "txt", "csv"])
-    
-    if uploaded_file is not None:
-        if st.session_state.last_uploaded_file != uploaded_file:
-            st.session_state.zip_buffer = None
-            st.session_state.disconnected_sites = {}
-            st.session_state.last_uploaded_file = uploaded_file
+    def create_widgets(self):
+        # Top frame for input controls.
+        controls_frame = ttk.Frame(self, style="TFrame")
+        controls_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
 
-        if uploaded_file.name.endswith('.xlsx'):
+        # ----------------------------
+        # Credentials & Site ID Frame
+        # ----------------------------
+        creds_frame = ttk.Labelframe(controls_frame, text="DB Credentials", style="Input.TLabelframe")
+        creds_frame.pack(fill=tk.X, padx=5, pady=5)
+        # Arrange using grid.
+        ttk.Label(creds_frame, text="Username:").grid(row=0, column=0, padx=5, pady=4, sticky="w")
+        self.username_entry = ttk.Entry(creds_frame, width=20, font=("Times New Roman", 12, "bold"))
+        self.username_entry.grid(row=0, column=1, padx=5, pady=4)
+        ttk.Label(creds_frame, text="Password:").grid(row=0, column=2, padx=5, pady=4, sticky="w")
+        self.password_entry = ttk.Entry(creds_frame, width=20, show="*", font=("Times New Roman", 12, "bold"))
+        self.password_entry.grid(row=0, column=3, padx=5, pady=4)
+        ttk.Label(creds_frame, text="Database:").grid(row=0, column=4, padx=5, pady=4, sticky="w")
+        self.database_entry = ttk.Entry(creds_frame, width=20, font=("Times New Roman", 12, "bold"))
+        self.database_entry.grid(row=0, column=5, padx=5, pady=4)
+        ttk.Label(creds_frame, text="Site ID:").grid(row=0, column=6, padx=5, pady=4, sticky="w")
+        self.siteid_entry = ttk.Entry(creds_frame, width=15, font=("Times New Roman", 12, "bold"))
+        self.siteid_entry.grid(row=0, column=7, padx=5, pady=4)
+
+        # ----------------------------
+        # File Upload Frame
+        # ----------------------------
+        file_frame = ttk.Labelframe(controls_frame, text="Upload File for Multiple Site IDs (Optional)", style="Input.TLabelframe")
+        file_frame.pack(fill=tk.X, padx=5, pady=5)
+        self.file_label = ttk.Label(file_frame, text="No file selected", style="TLabel")
+        self.file_label.pack(side=tk.LEFT, padx=5, pady=4)
+        ttk.Button(file_frame, text="Select File", command=self.select_file).pack(side=tk.LEFT, padx=5, pady=4)
+        ttk.Button(file_frame, text="Remove File", command=self.remove_file).pack(side=tk.LEFT, padx=5, pady=4)
+
+        # ----------------------------
+        # Server Series Frame
+        # ----------------------------
+        series_frame = ttk.Labelframe(controls_frame, text="Server Series", style="Input.TLabelframe")
+        series_frame.pack(fill=tk.X, padx=5, pady=5)
+        self.ip_series = tk.StringVar(value="16")
+        ttk.Radiobutton(series_frame, text="10.16.x.x", variable=self.ip_series, value="16", style="TRadiobutton").pack(side=tk.LEFT, padx=10, pady=4)
+        ttk.Radiobutton(series_frame, text="10.28.x.x", variable=self.ip_series, value="28", style="TRadiobutton").pack(side=tk.LEFT, padx=10, pady=4)
+
+        # ----------------------------
+        # Date Range Frame
+        # ----------------------------
+        date_frame = ttk.Labelframe(controls_frame, text="Date Range", style="Input.TLabelframe")
+        date_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(date_frame, text="From Date:").pack(side=tk.LEFT, padx=5, pady=4)
+        self.from_date = DateEntry(date_frame, width=20, date_pattern='yyyy-mm-dd',
+                                   background="white", foreground="black", font=("Times New Roman", 12, "bold"))
+        self.from_date.set_date(datetime.today())
+        self.from_date.pack(side=tk.LEFT, padx=5, pady=4)
+        ttk.Label(date_frame, text="To Date:").pack(side=tk.LEFT, padx=5, pady=4)
+        self.to_date = DateEntry(date_frame, width=20, date_pattern='yyyy-mm-dd',
+                                 background="white", foreground="black", font=("Times New Roman", 12, "bold"))
+        self.to_date.set_date(datetime.today())
+        self.to_date.pack(side=tk.LEFT, padx=5, pady=4)
+
+        # ----------------------------
+        # Action Buttons Frame
+        # ----------------------------
+        action_frame = ttk.Frame(controls_frame, style="TFrame")
+        action_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Button(action_frame, text="Generate Report", command=self.generate_reports).pack(side=tk.LEFT, padx=10, pady=4, expand=True, fill=tk.X)
+        self.download_button = ttk.Button(action_frame, text="Download Report", command=self.download_reports, state="disabled")
+        self.download_button.pack(side=tk.LEFT, padx=10, pady=4, expand=True, fill=tk.X)
+
+        # ----------------------------
+        # Log Output Area (at the bottom)
+        # ----------------------------
+        log_frame = ttk.Frame(self, style="TFrame")
+        log_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        # Create a top sub-frame for the log label and clear button.
+        log_top_frame = ttk.Frame(log_frame, style="TFrame")
+        log_top_frame.pack(side=tk.TOP, fill=tk.X)
+        log_label = ttk.Label(log_top_frame, text="Log Output:", style="TLabel")
+        log_label.pack(side=tk.LEFT, padx=5, pady=5)
+        ttk.Button(log_top_frame, text="Clear Log", command=self.clear_log).pack(side=tk.RIGHT, padx=5, pady=5)
+        self.log_text = ScrolledText(log_frame, wrap=tk.WORD, background="#FFFFFF", foreground="#333333", font=("Times New Roman", 12))
+        self.log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+    def select_file(self):
+        filename = filedialog.askopenfilename(title="Select File", filetypes=[("Excel files", "*.xlsx"), ("Text files", "*.txt"), ("CSV files", "*.csv")])
+        if filename:
+            self.file_label.config(text=os.path.basename(filename))
+            self.file_path = filename
+            self.log(f"Selected file: {filename}")
+
+    def remove_file(self):
+        """Clears the file selection."""
+        self.file_path = None
+        self.file_label.config(text="No file selected")
+        self.log("File selection cleared.")
+
+    def clear_log(self):
+        """Clears the log output area."""
+        self.log_text.delete("1.0", tk.END)
+
+    def log(self, message):
+        """Append a message to the log area."""
+        self.log_text.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {message}\n")
+        self.log_text.see(tk.END)
+
+    def generate_reports(self):
+        # Clear previous ZIP buffer and disable download button.
+        self.zip_buffer = None
+        self.download_button.config(state="disabled")
+        self.log("Starting report generation...")
+
+        # Get input values.
+        username = self.username_entry.get().strip()
+        password = self.password_entry.get().strip()
+        database = self.database_entry.get().strip()
+        site_id_manual = self.siteid_entry.get().strip()
+        ip_series_choice = self.ip_series.get()
+        from_date_str = self.from_date.get_date().strftime("%Y-%m-%d")
+        to_date_str = self.to_date.get_date().strftime("%Y-%m-%d")
+
+        # Determine mode: if a file is selected, use file mode; else use manual site ID.
+        if self.file_label.cget("text") != "No file selected":
+            # File mode: read file to get list of site IDs.
+            self.log("File upload mode detected. Reading Site IDs from file...")
             try:
-                df = pd.read_excel(uploaded_file)
-                if any(col.lower() == "siteid" for col in df.columns):
-                    df.columns = [col.lower() for col in df.columns]
-                    site_ids = df["siteid"].astype(str).tolist()
-                else:
-                    st.error("The uploaded Excel file must contain a column named 'siteid'.")
-                    site_ids = []
-            except Exception as e:
-                st.error(f"Error reading Excel file: {e}")
-                site_ids = []
-        else:
-            try:
-                file_bytes = uploaded_file.read()
-                file_text = file_bytes.decode("utf-8")
-                if "," in file_text:
-                    site_ids = [s.strip() for s in file_text.split(",") if s.strip()]
-                else:
-                    site_ids = [s.strip() for s in file_text.splitlines() if s.strip()]
-            except Exception as e:
-                st.error(f"Error reading file: {e}")
-                site_ids = []
-        
-        valid_site_ids = [sid for sid in site_ids if sid.isdigit() and len(sid) == 5]
-        st.write(f"Found {len(valid_site_ids)} valid site IDs.")
-        
-        if st.button("Generate Reports"):
-            if valid_site_ids:
-                st.info("Validating credentials with test connection...")
-                try:
-                    test_conn = connect_to_database(valid_site_ids[0], username, password, database, ip_series_choice)
-                    if not test_conn:
-                        raise Exception("Test connection failed.")
-                    test_conn.close()
-                    st.success("Credentials validated successfully.")
-                except Exception as e:
-                    st.error(f"Invalid credentials: {e}")
-                    st.stop()
-            
-            progress_placeholder = st.empty()
-            successful_reports = {}
-            disconnected_sites = {}
-            
-            for i, sid in enumerate(valid_site_ids, start=1):
-                progress_placeholder.text(f"Processing site {sid} ({i}/{len(valid_site_ids)})...")
-                try:
-                    from_date_str = from_date_input.strftime("%Y-%m-%d")
-                    to_date_str = to_date_input.strftime("%Y-%m-%d")
-                    result, site_name = get_report_data(sid, from_date_str, to_date_str, username, password, database, ip_series_choice)
-                    if result:
-                        report_text = format_report(result, sid, site_name, from_date_str, to_date_str)
-                        successful_reports[sid] = report_text
+                ext = os.path.splitext(self.file_path)[1].lower()
+                if ext == '.xlsx':
+                    df = pd.read_excel(self.file_path)
+                    # Look for a column that contains "siteid" (case-insensitive)
+                    cols = [col.lower() for col in df.columns]
+                    if "siteid" in cols:
+                        site_ids = df["siteid"].astype(str).tolist()
                     else:
-                        successful_reports[sid] = "No data found."
-                except Exception as e:
-                    disconnected_sites[sid] = f"Error occurred: {e}"
-            
-            progress_placeholder.text("All sites processed.")
-            st.session_state.disconnected_sites = disconnected_sites
-            
-            if successful_reports:
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                    for sid, report in successful_reports.items():
-                        zip_file.writestr(f"{sid}.txt", report)
-                zip_buffer.seek(0)
-                st.session_state.zip_buffer = zip_buffer
-            else:
-                st.error("No successful reports to save.")
+                        raise Exception("Excel file must contain a column named 'siteid'.")
+                else:
+                    with open(self.file_path, "r", encoding="utf-8") as f:
+                        file_text = f.read()
+                    if "," in file_text:
+                        site_ids = [s.strip() for s in file_text.split(",") if s.strip()]
+                    else:
+                        site_ids = [s.strip() for s in file_text.splitlines() if s.strip()]
+                self.log(f"Found {len(site_ids)} site IDs in file.")
+            except Exception as e:
+                messagebox.showerror("Error", f"Error reading file: {e}")
+                return
+        else:
+            # Manual mode: use the single site id.
+            if not site_id_manual:
+                messagebox.showerror("Error", "Please enter a Site ID or upload a file.")
+                return
+            site_ids = [site_id_manual]
+            self.log("Manual input mode selected.")
 
-    if st.session_state.zip_buffer is not None or st.session_state.disconnected_sites:
-        with st.container():
-            st.markdown('<div class="fixed-container">', unsafe_allow_html=True)
-            if st.session_state.zip_buffer is not None:
-                st.download_button("Download Connected Site Reports (ZIP)", st.session_state.zip_buffer, file_name="SiteReports.zip", key="download_zip")
-            if st.session_state.disconnected_sites:
-                st.markdown("<p><strong>Disconnected Sites:</strong></p>", unsafe_allow_html=True)
-                for sid, err in st.session_state.disconnected_sites.items():
-                    st.markdown(f"<p>{sid}: {err}</p>", unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
+        # Validate credentials for the first site ID.
+        self.log("Validating credentials with test connection...")
+        try:
+            test_conn = connect_to_database(site_ids[0], username, password, database, ip_series_choice)
+            if not test_conn:
+                raise Exception("Test connection failed.")
+            test_conn.close()
+            self.log("Credentials validated successfully.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Invalid credentials: {e}")
+            return
+
+        # Loop through the list of site IDs and generate reports.
+        successful_reports = {}
+        failed_sites = {}
+        total_sites = len(site_ids)
+        for i, sid in enumerate(site_ids, start=1):
+            self.log(f"Processing site {sid} ({i}/{total_sites})...")
+            try:
+                result, site_name = get_report_data(sid, from_date_str, to_date_str, username, password, database, ip_series_choice)
+                report_text = format_report(result, sid, site_name, from_date_str, to_date_str)
+                successful_reports[sid] = report_text
+            except Exception as e:
+                failed_sites[sid] = str(e)
+                self.log(f"Error for site {sid}: {e}")
+
+        self.log("Report generation completed.")
+        if successful_reports:
+            # Create a ZIP buffer containing one file per site.
+            self.zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(self.zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                for sid, report in successful_reports.items():
+                    zip_file.writestr(f"{sid}.txt", report)
+            self.zip_buffer.seek(0)
+            self.log("REPORTS GENERATED SUCCESSFULLY. CLICK ON DOWNLOAD REPORT.")
+            self.download_button.config(state="normal")
+        else:
+            messagebox.showerror("Error", "No successful reports to save.")
+            return
+
+        if failed_sites:
+            errors = "\n".join([f"{sid}: {err}" for sid, err in failed_sites.items()])
+            self.log("Failed Sites:\n" + errors)
+            messagebox.showwarning("Warning", f"Some sites could not be processed:\n{errors}")
+
+    def download_reports(self):
+        """
+        Automatically save the ZIP file to the user's Downloads folder as 'SiteReports.zip'.
+        If the file already exists, append a counter to the file name.
+        """
+        try:
+            downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
+            base_filename = "SiteReports"
+            extension = ".zip"
+            file_path = os.path.join(downloads_folder, base_filename + extension)
+            counter = 1
+            while os.path.exists(file_path):
+                file_path = os.path.join(downloads_folder, f"{base_filename}{counter}{extension}")
+                counter += 1
+            with open(file_path, "wb") as f:
+                f.write(self.zip_buffer.getvalue())
+            self.log(f"ZIP file auto-saved to {file_path}")
+            messagebox.showinfo("Success", f"Report auto-saved to:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error saving ZIP file: {e}")
 
 if __name__ == "__main__":
-    main()
+    app = SalesSummaryReportApp()
+    app.mainloop()
